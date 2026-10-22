@@ -53,6 +53,14 @@ type envelope struct {
 // DefaultTimeout covers the login endpoint, which answered in about 22 s in testing.
 const DefaultTimeout = 120 * time.Second
 
+// APIError is a non-zero application code in an otherwise successful HTTP answer.
+type APIError struct {
+	Msg  string
+	Code int
+}
+
+func (e *APIError) Error() string { return fmt.Sprintf("server code %d: %s", e.Code, e.Msg) }
+
 var errExpired = errors.New("token rejected")
 
 // NewClient builds a client for the API at baseURL. httpc may be nil.
@@ -216,7 +224,7 @@ func (c *Client) do(ctx context.Context, path string, body any, auth bool) (*env
 		return nil, fmt.Errorf("%s: decode response: %w", path, err)
 	}
 	if env.Code != 0 {
-		return nil, fmt.Errorf("%s: server code %d: %s", path, env.Code, env.Msg)
+		return nil, fmt.Errorf("%s: %w", path, &APIError{Code: env.Code, Msg: env.Msg})
 	}
 	return &env, nil
 }

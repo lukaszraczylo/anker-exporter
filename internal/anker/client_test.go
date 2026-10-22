@@ -3,6 +3,7 @@ package anker
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -162,5 +163,36 @@ func TestNewClient_DefaultTimeout(t *testing.T) {
 	}
 	if c.httpc.Timeout != DefaultTimeout {
 		t.Fatalf("timeout %v", c.httpc.Timeout)
+	}
+}
+
+func TestLogin_ServerRejectionIsAPIError(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"code":26108,"msg":"Email address or password incorrect."}`))
+	}))
+	err := c.Login(context.Background())
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		t.Fatalf("err = %v, want *APIError", err)
+	}
+	if ae.Code != 26108 || ae.Msg == "" {
+		t.Errorf("got %+v", ae)
+	}
+	if strings.Contains(err.Error(), testPassword) {
+		t.Error("error leaks password")
+	}
+}
+
+func TestLogin_TransportAndHTTP5xxAreNotAPIErrors(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	var ae *APIError
+	if err := c.Login(context.Background()); err == nil || errors.As(err, &ae) {
+		t.Fatalf("5xx err = %v", err)
+	}
+	c.base = "http://127.0.0.1:1"
+	if err := c.Login(context.Background()); err == nil || errors.As(err, &ae) {
+		t.Fatalf("transport err = %v", err)
 	}
 }
