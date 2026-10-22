@@ -68,6 +68,11 @@ func NewRunner(api TokenSource, sn string, trigger time.Duration, onMessage func
 	return r
 }
 
+// UseConnector replaces the MQTT connect step; call it before Run. Tests use it to feed recorded frames.
+func (r *Runner) UseConnector(c func(ctx context.Context, info anker.MQTTInfo, handler func(string, []byte)) (Link, error)) {
+	r.connect = c
+}
+
 func reportTo(f func(error), err error) {
 	if f != nil {
 		f(err)
