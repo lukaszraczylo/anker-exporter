@@ -94,6 +94,7 @@ func Connect(ctx context.Context, info anker.MQTTInfo, handler func(topic string
 	s.client = mqtt.NewClient(opts)
 	tok := s.client.Connect()
 	if err := wait(ctx, tok, connectTimeout+opTimeout); err != nil {
+		s.client.Disconnect(0) // stops a connect still in flight from leaking the client
 		return nil, fmt.Errorf("mqtt connect: %w", err)
 	}
 	return s, nil
@@ -121,7 +122,7 @@ func (s *Session) resubscribe(c mqtt.Client) {
 	s.mu.Unlock()
 	for _, t := range topics {
 		if err := wait(context.Background(), c.Subscribe(t, qosAtMostOnce, s.onMessage), opTimeout); err != nil && s.onError != nil {
-			s.onError(fmt.Errorf("mqtt resubscribe %s: %w", t, err))
+			s.onError(fmt.Errorf("mqtt resubscribe %s: %w", maskTopic(t), err))
 		}
 	}
 }
@@ -143,7 +144,7 @@ func (s *Session) addTopic(topic string) {
 func (s *Session) Subscribe(topic string) error {
 	s.addTopic(topic)
 	if err := wait(context.Background(), s.client.Subscribe(topic, qosAtMostOnce, s.onMessage), opTimeout); err != nil {
-		return fmt.Errorf("mqtt subscribe %s: %w", topic, err)
+		return fmt.Errorf("mqtt subscribe %s: %w", maskTopic(topic), err)
 	}
 	return nil
 }
@@ -151,7 +152,7 @@ func (s *Session) Subscribe(topic string) error {
 // Publish sends payload to topic.
 func (s *Session) Publish(topic string, payload []byte) error {
 	if err := wait(context.Background(), s.client.Publish(topic, qosAtMostOnce, false, payload), opTimeout); err != nil {
-		return fmt.Errorf("mqtt publish %s: %w", topic, err)
+		return fmt.Errorf("mqtt publish %s: %w", maskTopic(topic), err)
 	}
 	return nil
 }

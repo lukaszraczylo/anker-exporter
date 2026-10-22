@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	mqtt "github.com/eclipse/paho.mqtt.golang"
+
 	"github.com/lukaszraczylo/anker-exporter/internal/anker"
 )
 
@@ -116,5 +118,37 @@ func TestClientOptions_NoAutoReconnectAndKeepalive(t *testing.T) {
 	}
 	if len(o.Servers) != 1 || o.Servers[0].Host != "example.invalid:8883" {
 		t.Errorf("servers %v", o.Servers)
+	}
+}
+
+func TestMaskTopic(t *testing.T) {
+	cases := map[string]string{
+		TelemetryTopic("anker_power", "AZSN123456789"): "dt/anker_power/A1761/.../#",
+		CommandTopic("anker_power", "AZSN123456789"):   "cmd/anker_power/A1761/.../req",
+		"short": "short",
+	}
+	for in, want := range cases {
+		got := maskTopic(in)
+		want = strings.Replace(want, "...", "...6789", 1)
+		if got != want {
+			t.Errorf("maskTopic(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSessionErrors_DoNotLeakSerial(t *testing.T) {
+	const sn = "AZSN123456789"
+	s := &Session{client: mqtt.NewClient(mqtt.NewClientOptions())}
+	errs := []error{
+		s.Subscribe(TelemetryTopic("anker_power", sn)),
+		s.Publish(CommandTopic("anker_power", sn), nil),
+	}
+	for _, err := range errs {
+		if err == nil {
+			t.Fatal("expected an error from an unconnected client")
+		}
+		if strings.Contains(err.Error(), sn) {
+			t.Errorf("error leaks the serial: %v", err)
+		}
 	}
 }
