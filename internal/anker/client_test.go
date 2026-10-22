@@ -2,10 +2,15 @@ package anker
 
 import (
 	"context"
+	"crypto/md5" //nolint:gosec // gtoken is defined as md5(user_id)
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -194,5 +199,75 @@ func TestLogin_TransportAndHTTP5xxAreNotAPIErrors(t *testing.T) {
 	c.base = "http://127.0.0.1:1"
 	if err := c.Login(context.Background()); err == nil || errors.As(err, &ae) {
 		t.Fatalf("transport err = %v", err)
+	}
+}
+
+func fixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("..", "..", "testdata", "api", name)) //nolint:gosec // fixed test path
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// replayClient serves each API path from its recorded fixture and checks the session headers on authed calls.
+func replayClient(t *testing.T) *Client {
+	t.Helper()
+	files := map[string]string{
+		"/passport/login": "login.json",
+		"/power_service/v1/app/get_relate_and_bind_devices": "devices.json",
+		"/app/devicemanage/get_user_mqtt_info":              "mqtt_info.json",
+	}
+	return newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name, ok := files[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Path != "/passport/login" {
+			sum := md5.Sum([]byte("TESTUSER0001")) //nolint:gosec // gtoken is defined as md5(user_id)
+			if r.Header.Get("X-Auth-Token") != "TESTTOKEN" || r.Header.Get("Gtoken") != hex.EncodeToString(sum[:]) {
+				t.Errorf("%s: session headers do not match the recorded login", r.URL.Path)
+			}
+		}
+		_, _ = w.Write(fixture(t, name))
+	}))
+}
+
+func TestLogin_ReplaysRecordedResponse(t *testing.T) {
+	c := replayClient(t)
+	if err := c.Login(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sum := md5.Sum([]byte("TESTUSER0001")) //nolint:gosec // see replayClient
+	if c.token != "TESTTOKEN" || c.gtoken != hex.EncodeToString(sum[:]) {
+		t.Errorf("session = %q / %q", c.token, c.gtoken)
+	}
+}
+
+func TestDevices_ReplaysRecordedResponse(t *testing.T) {
+	got, err := replayClient(t).Devices(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []Device{{SN: "TESTSN0001", PN: "A1761"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("devices = %+v, want %+v", got, want)
+	}
+}
+
+func TestMQTTInfo_ReplaysRecordedResponse(t *testing.T) {
+	got, err := replayClient(t).MQTTInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Endpoint == "" || got.AppName != "anker_power" || got.UserID != "TESTUSER0001" ||
+		got.ThingName != "TESTTHING0001" || got.CertificateID != "TESTCERTID0001" {
+		t.Errorf("info = %+v", got)
+	}
+	for name, pem := range map[string]string{"cert": got.CertPEM, "key": got.KeyPEM, "root": got.RootCAPEM} {
+		if !strings.HasPrefix(pem, "-----BEGIN ") {
+			t.Errorf("%s is not PEM shaped", name)
+		}
 	}
 }

@@ -1,0 +1,18 @@
+{
+  "code": 0,
+  "data": {
+    "app_name": "anker_power",
+    "aws_root_ca1_pem": "-----BEGIN CERTIFICATE-----\nVEVTVEZBS0U=\n-----END CERTIFICATE-----",
+    "certificate_id": "TESTCERTID0001",
+    "certificate_pem": "-----BEGIN CERTIFICATE-----\nVEVTVEZBS0U=\n-----END CERTIFICATE-----\n",
+    "endpoint_addr": "aiot-mqtt-eu.anker.com",
+    "origin": "",
+    "pkcs12": "TESTKEY",
+    "private_key": "-----BEGIN RSA PRIVATE KEY-----\nVEVTVEZBS0U=\n-----END RSA PRIVATE KEY-----\n",
+    "public_key": "",
+    "thing_name": "TESTTHING0001",
+    "user_id": "TESTUSER0001"
+  },
+  "msg": "success!",
+  "trace_id": "TESTTRACE0001"
+}

@@ -1,0 +1,51 @@
+{
+  "code": 0,
+  "data": {
+    "data": [
+      {
+        "alias_name": "TESTVALUE",
+        "blue_password": "",
+        "bt_ble_id": "TESTBLEID0001",
+        "bt_ble_mac": "TESTVALUE",
+        "bws_surplus": 0,
+        "charge": false,
+        "device_name": "TESTVALUE",
+        "device_sn": "TESTSN0001",
+        "device_sw_version": "v1.5.4",
+        "group_info": null,
+        "has_manual": true,
+        "hes_data": null,
+        "img_url": "https://example.invalid/device.png",
+        "init_status": 0,
+        "intgr_device": null,
+        "link_info": null,
+        "link_time": 1747237429,
+        "ms_device_type": 1,
+        "not_allow_device_add_remove": 0,
+        "ocpp_connect_status": 0,
+        "owner_user_id": "TESTUSER0001",
+        "platform_logo": "",
+        "platform_tag": "",
+        "product_code": "A1761",
+        "relate_type": [
+          "ble",
+          "wifi"
+        ],
+        "rssi": "-53",
+        "tag": "",
+        "tag_alias": "",
+        "tag_id": 0,
+        "tag_img": "",
+        "time_zone": "GMT0BST,M3.5.0/1,M10.5.0",
+        "type_tag": "",
+        "type_tag_id": 0,
+        "type_tag_img": "",
+        "wifi_mac": "TESTVALUE",
+        "wifi_name": "TESTVALUE",
+        "wifi_online": true
+      }
+    ]
+  },
+  "msg": "success!",
+  "trace_id": "TESTTRACE0001"
+}
