@@ -271,3 +271,15 @@ func TestMQTTInfo_ReplaysRecordedResponse(t *testing.T) {
 		}
 	}
 }
+
+func TestMQTTInfo_LoginRejectionIsLoginErrorWithAPIError(t *testing.T) {
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"code":26108,"msg":"Email address or password incorrect."}`))
+	}))
+	_, err := c.MQTTInfo(context.Background())
+	var le *LoginError
+	var ae *APIError
+	if !errors.As(err, &le) || !errors.As(err, &ae) {
+		t.Fatalf("err = %v, want LoginError wrapping *APIError", err)
+	}
+}

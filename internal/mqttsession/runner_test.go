@@ -248,3 +248,44 @@ func TestRunner_RejectsOutOfRangeTrigger(t *testing.T) {
 		t.Error("expected error for sub-second trigger")
 	}
 }
+
+type fatalErr struct{}
+
+func (fatalErr) Error() string { return "fatal" }
+func (fatalErr) Fatal() bool   { return true }
+
+type failingAPI struct {
+	err   error
+	calls int
+}
+
+func (a *failingAPI) MQTTInfo(context.Context) (anker.MQTTInfo, error) {
+	a.calls++
+	return anker.MQTTInfo{}, a.err
+}
+
+func TestRunner_ReturnsFatalTokenError(t *testing.T) {
+	api := &failingAPI{err: fatalErr{}}
+	r := NewRunner(api, "SN1", 60*time.Second, nil)
+	r.baseDelay = time.Millisecond
+	if err := r.Run(context.Background()); !errors.As(err, new(fatalErr)) {
+		t.Fatalf("Run = %v, want the fatal error", err)
+	}
+	if api.calls != 1 {
+		t.Errorf("MQTTInfo calls = %d, want 1", api.calls)
+	}
+}
+
+func TestRunner_RetriesPlainTokenError(t *testing.T) {
+	api := &failingAPI{err: errors.New("boom")}
+	r := NewRunner(api, "SN1", 60*time.Second, nil)
+	r.baseDelay = time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if err := r.Run(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Run = %v", err)
+	}
+	if api.calls < 2 {
+		t.Errorf("MQTTInfo calls = %d, want retries", api.calls)
+	}
+}

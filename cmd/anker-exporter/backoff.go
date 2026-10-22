@@ -67,6 +67,9 @@ type fatalError struct{ error }
 
 func (e fatalError) Unwrap() error { return e.error }
 
+// Fatal tells mqttsession.Runner to stop retrying.
+func (fatalError) Fatal() bool { return true }
+
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()

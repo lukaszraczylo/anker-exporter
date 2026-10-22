@@ -63,6 +63,12 @@ func (e *APIError) Error() string { return fmt.Sprintf("server code %d: %s", e.C
 
 var errExpired = errors.New("token rejected")
 
+// LoginError marks a failed login that an authenticated call started on its own.
+type LoginError struct{ Err error }
+
+func (e *LoginError) Error() string { return e.Err.Error() }
+func (e *LoginError) Unwrap() error { return e.Err }
+
 // NewClient builds a client for the API at baseURL. httpc may be nil.
 func NewClient(baseURL, email, password, country string, httpc *http.Client) (*Client, error) {
 	if baseURL == "" || email == "" || password == "" {
@@ -169,7 +175,7 @@ func (c *Client) authed(ctx context.Context, path string) (*envelope, error) {
 	c.mu.Unlock()
 	if !have {
 		if err := c.Login(ctx); err != nil {
-			return nil, err
+			return nil, &LoginError{Err: err}
 		}
 	}
 	env, err := c.do(ctx, path, map[string]any{}, true)
@@ -177,7 +183,7 @@ func (c *Client) authed(ctx context.Context, path string) (*envelope, error) {
 		return env, err
 	}
 	if err := c.Login(ctx); err != nil {
-		return nil, err
+		return nil, &LoginError{Err: err}
 	}
 	return c.do(ctx, path, map[string]any{}, true)
 }

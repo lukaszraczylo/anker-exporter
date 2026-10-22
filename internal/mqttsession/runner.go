@@ -2,6 +2,7 @@ package mqttsession
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -19,6 +20,14 @@ const (
 // TokenSource supplies fresh MQTT connection details for each (re)connect.
 type TokenSource interface {
 	MQTTInfo(ctx context.Context) (anker.MQTTInfo, error)
+}
+
+// fatal is implemented by errors that retrying cannot fix. Run returns them.
+type fatal interface{ Fatal() bool }
+
+func isFatal(err error) bool {
+	var f fatal
+	return errors.As(err, &f) && f.Fatal()
 }
 
 // Link is the part of a live MQTT session the Runner uses.
@@ -83,7 +92,8 @@ func (r *Runner) triggerSeconds() int { return int(r.trigger / time.Second) }
 
 func (r *Runner) nextDelay(d time.Duration) time.Duration { return min(d*2, maxDelay) }
 
-// Run blocks until ctx ends, returning ctx.Err(), or until the trigger setting is invalid.
+// Run blocks until ctx ends, returning ctx.Err(), or until the trigger setting is invalid
+// or the token source returns a fatal error.
 func (r *Runner) Run(ctx context.Context) error {
 	if _, err := frame.BuildTrigger(r.sn, "check", "check", r.triggerSeconds(), time.Now()); err != nil {
 		return fmt.Errorf("runner: trigger %v: %w", r.trigger, err)
@@ -93,6 +103,9 @@ func (r *Runner) Run(ctx context.Context) error {
 		established, err := r.runSession(ctx)
 		if ctx.Err() != nil {
 			break
+		}
+		if isFatal(err) {
+			return err
 		}
 		if established {
 			delay = r.baseDelay

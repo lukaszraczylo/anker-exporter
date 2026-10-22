@@ -151,7 +151,7 @@ func work(ctx context.Context, log *slog.Logger, cfg config.Config, reg promethe
 	if err = col.Register(reg); err != nil {
 		return err
 	}
-	r := mqttsession.NewRunner(cl, sn, trigger, col.Update)
+	r := mqttsession.NewRunner(newLockoutSource(cl, log, defaultBackoff, sleepCtx), sn, trigger, col.Update)
 	r.OnBadFrame = func(err error) {
 		col.CountBadFrame()
 		log.Warn("bad frame", append([]any{"err", err}, badFrameAttrs(err)...)...)
