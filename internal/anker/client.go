@@ -35,6 +35,7 @@ type Device struct{ SN, PN string }
 // Client is an Anker cloud API client. Safe for concurrent use.
 type Client struct {
 	httpc    *http.Client
+	expires  time.Time
 	base     string
 	email    string
 	password string
@@ -62,6 +63,13 @@ type APIError struct {
 func (e *APIError) Error() string { return fmt.Sprintf("server code %d: %s", e.Code, e.Msg) }
 
 var errExpired = errors.New("token rejected")
+
+const (
+	// codeTokenKickedOut is the body code for a token replaced by a newer login; HTTP status stays 200.
+	codeTokenKickedOut = 26084
+	// expirySkew makes a token that expires this soon count as expired.
+	expirySkew = 60 * time.Second
+)
 
 // LoginError marks a failed login that an authenticated call started on its own.
 type LoginError struct{ Err error }
@@ -108,6 +116,7 @@ func (c *Client) Login(ctx context.Context) error {
 	var d struct {
 		AuthToken string `json:"auth_token"`
 		UserID    string `json:"user_id"`
+		ExpiresAt int64  `json:"token_expires_at"`
 	}
 	if err := json.Unmarshal(env.Data, &d); err != nil {
 		return fmt.Errorf("login: decode data: %w", err)
@@ -118,6 +127,10 @@ func (c *Client) Login(ctx context.Context) error {
 	sum := md5.Sum([]byte(d.UserID)) //nolint:gosec // see import
 	c.mu.Lock()
 	c.token, c.gtoken = d.AuthToken, hex.EncodeToString(sum[:])
+	c.expires = time.Time{}
+	if d.ExpiresAt > 0 {
+		c.expires = time.Unix(d.ExpiresAt, 0)
+	}
 	c.mu.Unlock()
 	return nil
 }
@@ -168,10 +181,11 @@ func (c *Client) Devices(ctx context.Context) ([]Device, error) {
 	return out, nil
 }
 
-// authed posts to path, logging in first when needed and once more on an expired token.
+// authed posts to path, logging in first when the token is missing or about to expire,
+// and once more when the server rejects it.
 func (c *Client) authed(ctx context.Context, path string) (*envelope, error) {
 	c.mu.Lock()
-	have := c.token != ""
+	have := c.token != "" && (c.expires.IsZero() || time.Until(c.expires) > expirySkew)
 	c.mu.Unlock()
 	if !have {
 		if err := c.Login(ctx); err != nil {
@@ -228,6 +242,9 @@ func (c *Client) do(ctx context.Context, path string, body any, auth bool) (*env
 	var env envelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		return nil, fmt.Errorf("%s: decode response: %w", path, err)
+	}
+	if auth && env.Code == codeTokenKickedOut {
+		return nil, errExpired
 	}
 	if env.Code != 0 {
 		return nil, fmt.Errorf("%s: %w", path, &APIError{Code: env.Code, Msg: env.Msg})

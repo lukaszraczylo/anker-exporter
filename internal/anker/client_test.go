@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const testPassword = "s3cret-pw-value"
@@ -281,5 +283,49 @@ func TestMQTTInfo_LoginRejectionIsLoginErrorWithAPIError(t *testing.T) {
 	var ae *APIError
 	if !errors.As(err, &le) || !errors.As(err, &ae) {
 		t.Fatalf("err = %v, want LoginError wrapping *APIError", err)
+	}
+}
+
+func TestRequest_ReloginOnTokenKickedOutBodyCode(t *testing.T) {
+	var logins atomic.Int32
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/passport/login" {
+			n := logins.Add(1)
+			loginOK(w, map[int32]string{1: "old", 2: "new"}[n])
+			return
+		}
+		if r.Header.Get("x-auth-token") != "new" {
+			_, _ = w.Write([]byte(`{"code":26084,"msg":"TokenKickedOutError"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"endpoint_addr":"ep"}}`))
+	}))
+	got, err := c.MQTTInfo(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Endpoint != "ep" || logins.Load() != 2 {
+		t.Errorf("endpoint=%q logins=%d", got.Endpoint, logins.Load())
+	}
+}
+
+func TestRequest_ReloginWhenTokenNearsExpiry(t *testing.T) {
+	var logins atomic.Int32
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/passport/login" {
+			logins.Add(1)
+			soon := time.Now().Add(30 * time.Second).Unix()
+			_, _ = w.Write([]byte(`{"code":0,"data":{"auth_token":"t","user_id":"uid-1","token_expires_at":` + strconv.FormatInt(soon, 10) + `}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"code":0,"data":{"endpoint_addr":"ep"}}`))
+	}))
+	for range 2 {
+		if _, err := c.MQTTInfo(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if logins.Load() != 2 {
+		t.Errorf("logins = %d, want a fresh login for the near-expiry token", logins.Load())
 	}
 }
