@@ -39,10 +39,33 @@ func main() {
 	out := flag.String("out", "capture/frames.jsonl", "output file (keep it out of git)")
 	trigger := flag.Bool("trigger", false, "publish one realtime trigger (0057) after subscribing")
 	timeout := flag.Int("timeout", 60, "trigger timeout in seconds")
+	recordDir := flag.String("record-api", "", "write sanitised login, device and MQTT-info responses to this directory and exit")
+	rawDir := flag.String("raw-dir", "", "with -record-api, also save the raw bodies here (keep it out of the repository)")
+	fromRaw := flag.String("from-raw", "", "with -record-api, sanitise raw bodies saved in this directory instead of logging in")
 	flag.Parse()
+	if *recordDir != "" {
+		if err := runRecord(*recordDir, *rawDir, *fromRaw); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if err := run(*dur, *out, *trigger, *timeout); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runRecord(outDir, rawDir, fromRaw string) error {
+	if fromRaw != "" {
+		return sanitiseRaw(fromRaw, outDir)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	region := strings.ToLower(envOr("ANKER_REGION", "eu"))
+	base, ok := apiHosts[region]
+	if !ok {
+		return fmt.Errorf("unknown ANKER_REGION %q", region)
+	}
+	return recordAPI(ctx, base, os.Getenv("ANKER_EMAIL"), os.Getenv("ANKER_PASSWORD"), envOr("ANKER_COUNTRY", "GB"), outDir, rawDir)
 }
 
 func run(dur time.Duration, out string, trigger bool, timeoutSec int) error {
