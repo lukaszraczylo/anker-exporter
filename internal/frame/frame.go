@@ -110,20 +110,29 @@ func decodeFrame(b []byte) (Message, error) {
 	if sum != b[len(b)-1] {
 		return Message{}, ErrChecksum
 	}
-	msg := Message{
-		Type:    hex.EncodeToString(b[7:9]),
-		Values:  map[string]float64{},
-		Strings: map[string]string{},
-	}
+	msg := newMessage(hex.EncodeToString(b[7:9]))
 	if msg.Type != msgTelemetry {
 		return msg, nil
 	}
 	body := b[headerLen : len(b)-1]
-	// An optional counter byte follows the type unless it already looks like a field tag (a0-a9).
-	if len(body) > 0 && (body[0] < 0xa0 || body[0] > 0xa9) {
-		body = body[1:]
+	// The counter byte after the type is optional and can look like a field tag, so the
+	// alignment is chosen by whichever field walk ends exactly at the checksum.
+	plain := newMessage(msg.Type)
+	plainErr := decodeFields(body, &plain)
+	if plainErr == nil {
+		return plain, nil
 	}
-	return msg, decodeFields(body, &msg)
+	if len(body) > 0 {
+		counted := newMessage(msg.Type)
+		if decodeFields(body[1:], &counted) == nil {
+			return counted, nil
+		}
+	}
+	return msg, plainErr
+}
+
+func newMessage(typ string) Message {
+	return Message{Type: typ, Values: map[string]float64{}, Strings: map[string]string{}}
 }
 
 func decodeFields(body []byte, msg *Message) error {

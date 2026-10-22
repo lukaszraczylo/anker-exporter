@@ -312,10 +312,44 @@ func TestDecode_ErrorDetailAndRaw(t *testing.T) {
 	}
 }
 
-// Known limitation: a counter byte in 0xa0-0xa9 is read as a field tag, so the frame fails with ErrLength.
 func TestDecode_CounterByteInTagRange(t *testing.T) {
 	f := buildFrame("0405", []byte{0xa3}, fld(0xc1, 0x01, 42))
+	m, err := Decode(wrap(t, f))
+	if err != nil {
+		t.Fatalf("err = %v, want success with the counter byte skipped", err)
+	}
+	if got := m.Values["main_battery_soc"]; got != 42 {
+		t.Fatalf("main_battery_soc = %v, want 42", got)
+	}
+}
+
+func TestDecode_OnlyCounterAlignmentWalksCleanly(t *testing.T) {
+	// Without the counter byte, 0x05 reads as a tag and its length 0xc1 overruns the frame.
+	f := buildFrame("0405", []byte{0x05}, fld(0xc1, 0x01, 77))
+	m, err := Decode(wrap(t, f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Values["main_battery_soc"]; got != 77 {
+		t.Fatalf("main_battery_soc = %v, want 77", got)
+	}
+}
+
+func TestDecode_NoCounterWinsWhenBothAlignmentsWalk(t *testing.T) {
+	// Read without a counter this is one 0xc1 field; read with one it is 0x04 and 0x00 fields.
+	f := buildFrame("0405", []byte{0xc1, 0x04, 0x01, 0x2a, 0x00, 0x00})
+	m, err := Decode(wrap(t, f))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Values["main_battery_soc"]; got != 42 {
+		t.Fatalf("main_battery_soc = %v, want 42 from the no-counter reading", got)
+	}
+}
+
+func TestDecode_NeitherAlignmentWalksIsErrLength(t *testing.T) {
+	f := buildFrame("0405", []byte{0xc1, 0x09, 0x01})
 	if _, err := Decode(wrap(t, f)); !errors.Is(err, ErrLength) {
-		t.Fatalf("err = %v, want ErrLength from the mis-sliced counter byte", err)
+		t.Fatalf("err = %v, want ErrLength", err)
 	}
 }
