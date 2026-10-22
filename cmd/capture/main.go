@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -18,6 +19,9 @@ import (
 	"github.com/lukaszraczylo/anker-exporter/internal/frame"
 	"github.com/lukaszraczylo/anker-exporter/internal/mqttsession"
 )
+
+// The login endpoint answered in ~22 s in testing, so the default 30 s client timeout is too tight.
+const apiTimeout = 120 * time.Second
 
 var apiHosts = map[string]string{
 	"eu":  "https://ankerpower-api-eu.anker.com",
@@ -50,7 +54,7 @@ func run(dur time.Duration, out string, trigger bool, timeoutSec int) error {
 	if !ok {
 		return fmt.Errorf("unknown ANKER_REGION %q", region)
 	}
-	cl, err := anker.NewClient(base, os.Getenv("ANKER_EMAIL"), os.Getenv("ANKER_PASSWORD"), envOr("ANKER_COUNTRY", "GB"), nil)
+	cl, err := anker.NewClient(base, os.Getenv("ANKER_EMAIL"), os.Getenv("ANKER_PASSWORD"), envOr("ANKER_COUNTRY", "GB"), &http.Client{Timeout: apiTimeout})
 	if err != nil {
 		return err
 	}
