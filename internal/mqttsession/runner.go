@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/lukaszraczylo/anker-exporter/internal/anker"
@@ -53,6 +54,7 @@ type Runner struct {
 	OnConnect  func()
 	OnError    func(error)
 
+	sleep       func(context.Context, time.Duration) bool
 	sn          string
 	trigger     time.Duration
 	baseDelay   time.Duration
@@ -65,6 +67,7 @@ func NewRunner(api TokenSource, sn string, trigger time.Duration, onMessage func
 	r := &Runner{
 		api: api, sn: sn, trigger: trigger, onMessage: onMessage,
 		baseDelay:   defaultBaseDelay,
+		sleep:       sleep,
 		resendAfter: trigger * resendNum / resendDen,
 	}
 	r.connect = func(ctx context.Context, info anker.MQTTInfo, h func(string, []byte)) (Link, error) {
@@ -111,7 +114,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			delay = r.baseDelay
 		}
 		reportTo(r.OnError, err)
-		if !sleep(ctx, delay) {
+		if !r.sleep(ctx, delay) {
 			break
 		}
 		if !established {
@@ -132,13 +135,18 @@ func sleep(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// runSession returns once the session ends; established reports whether it got as far as subscribing.
+// runSession returns once the session ends. established reports whether the session stayed up
+// for resendAfter or delivered a frame; a broker that drops us right after subscribing is not.
 func (r *Runner) runSession(ctx context.Context) (established bool, err error) {
 	info, err := r.api.MQTTInfo(ctx)
 	if err != nil {
 		return false, fmt.Errorf("mqtt info: %w", err)
 	}
-	sess, err := r.connect(ctx, info, r.handle)
+	var gotFrame atomic.Bool
+	sess, err := r.connect(ctx, info, func(topic string, payload []byte) {
+		gotFrame.Store(true)
+		r.handle(topic, payload)
+	})
 	if err != nil {
 		return false, err
 	}
@@ -146,6 +154,8 @@ func (r *Runner) runSession(ctx context.Context) (established bool, err error) {
 	if err = sess.Subscribe(TelemetryTopic(info.AppName, r.sn)); err != nil {
 		return false, err
 	}
+	subscribedAt := time.Now()
+	defer func() { established = gotFrame.Load() || time.Since(subscribedAt) >= r.resendAfter }()
 	if r.OnConnect != nil {
 		r.OnConnect()
 	}

@@ -289,3 +289,63 @@ func TestRunner_RetriesPlainTokenError(t *testing.T) {
 		t.Errorf("MQTTInfo calls = %d, want retries", api.calls)
 	}
 }
+
+func TestRunner_DelayGrowsWhenBrokerDropsRightAfterSubscribe(t *testing.T) {
+	h := newHarness(func(frame.Message) {})
+	h.r.baseDelay = time.Second
+	delays := make(chan time.Duration, 16)
+	h.r.sleep = func(ctx context.Context, d time.Duration) bool {
+		delays <- d
+		return ctx.Err() == nil
+	}
+	h.r.connect = func(_ context.Context, _ anker.MQTTInfo, handler func(string, []byte)) (Link, error) {
+		s := newFakeSession(handler)
+		close(s.lost)
+		return s, nil
+	}
+	cancel, _ := h.start(t)
+	var got []time.Duration
+	for i := 0; i < 5; i++ {
+		got = append(got, recv(t, delays, "reconnect delay"))
+	}
+	cancel()
+	want := []time.Duration{1, 2, 4, 8, 16}
+	for i, w := range want {
+		if got[i] != w*time.Second {
+			t.Fatalf("delays = %v, want doubling from 1s", got)
+		}
+	}
+}
+
+func TestRunner_DelayResetsAfterSessionDeliveredFrame(t *testing.T) {
+	good := goodPayloads(t)
+	h := newHarness(func(frame.Message) {})
+	h.r.baseDelay = time.Second
+	delays := make(chan time.Duration, 16)
+	h.r.sleep = func(ctx context.Context, d time.Duration) bool {
+		delays <- d
+		return ctx.Err() == nil
+	}
+	n := 0
+	h.r.connect = func(_ context.Context, _ anker.MQTTInfo, handler func(string, []byte)) (Link, error) {
+		n++
+		s := newFakeSession(handler)
+		if n == 3 {
+			handler("t", good[0])
+		}
+		close(s.lost)
+		return s, nil
+	}
+	cancel, _ := h.start(t)
+	var got []time.Duration
+	for i := 0; i < 3; i++ {
+		got = append(got, recv(t, delays, "reconnect delay"))
+	}
+	cancel()
+	want := []time.Duration{1, 2, 1}
+	for i, w := range want {
+		if got[i] != w*time.Second {
+			t.Fatalf("delays = %v, want 1s,2s then reset to 1s", got)
+		}
+	}
+}
