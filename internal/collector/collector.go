@@ -26,6 +26,8 @@ const (
 )
 
 type gaugeSpec struct {
+	name  string
+	help  string
 	desc  *prometheus.Desc
 	field string
 }
@@ -67,6 +69,8 @@ func New(device string, staleAfter time.Duration, now func() time.Time) *Collect
 		}
 		c.gauges = append(c.gauges, gaugeSpec{
 			field: f.Name,
+			name:  metricName(f),
+			help:  help,
 			desc:  prometheus.NewDesc(metricName(f), help, []string{deviceLabel}, nil),
 		})
 	}
@@ -123,7 +127,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, 0, c.device)
 		return
 	}
-	age := c.now().Sub(c.last)
+	age := max(c.now().Sub(c.last), 0)
 	ch <- prometheus.MustNewConstMetric(c.age, prometheus.GaugeValue, age.Seconds(), c.device)
 	if age > c.staleAfter {
 		ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, 0, c.device)
@@ -154,4 +158,18 @@ func (c *Collector) collectInfo(ch chan<- prometheus.Metric) {
 	}
 	desc := prometheus.NewDesc(namespace+"_info", "Device identity and firmware versions", labels, nil)
 	ch <- prometheus.MustNewConstMetric(desc, prometheus.GaugeValue, 1, vals...)
+}
+
+// MetricList returns "name<TAB>help" lines for every metric the collector can expose.
+func (c *Collector) MetricList() []string {
+	out := []string{
+		namespace + "_up\t1 if a telemetry frame arrived within the staleness window, else 0",
+		namespace + "_last_message_age_seconds\tSeconds since the last accepted telemetry frame",
+		namespace + "_bad_frames_total\tFrames that failed to decode",
+		namespace + "_info\tDevice identity and firmware versions",
+	}
+	for _, g := range c.gauges {
+		out = append(out, g.name+"\t"+g.help)
+	}
+	return out
 }
