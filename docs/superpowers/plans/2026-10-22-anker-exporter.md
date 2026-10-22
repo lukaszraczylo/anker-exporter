@@ -134,3 +134,23 @@
 - [ ] **Step 3:** Write a multi-stage `Dockerfile` (distroless static, non-root). `README.md` lists the env vars, the metric names and the privacy and terms-of-service risk from the spec.
 - [ ] **Step 4: Live check.** Run `go run ./cmd/anker-exporter` with the credentials exported, then `curl -s localhost:9876/metrics | grep anker_c1000_`. Expected: `anker_c1000_up 1` and battery and power values that match the device display. Show the owner the output. Check the logs with `grep -i` for the password and token. Expected: no match.
 - [ ] **Step 5:** Run `go vet ./...` and `go test ./...` (pass). Commit `feat: add exporter entrypoint and container image`.
+
+---
+
+### Task 8: Recorded fixtures, replay tests and counter-byte fix
+
+Added after Task 7. The owner asked for unit tests built on mocks that mirror the live answers. Task 7 also showed that the optional counter byte can mis-slice a frame.
+
+**Files:**
+- Modify: `cmd/capture/main.go` (new flag `-record-api <dir>`), `internal/frame/frame.go`, `internal/frame/frame_test.go`, `internal/anker/client_test.go`
+- Create: `testdata/api/login.json`, `testdata/api/devices.json`, `testdata/api/mqtt_info.json`, `internal/e2e/replay_test.go`, `internal/anker/fixtures_guard_test.go`
+
+**Interfaces:**
+- Consumes: `anker.Client`, `frame.Decode`, `mqttsession.Runner` with its fake `Link`, `collector.Collector`.
+- Produces: sanitised fixtures under `testdata/api/`; no new exported API.
+
+- [ ] **Step 1:** Add `-record-api <dir>` to `cmd/capture`. After one live login it writes the raw JSON bodies of the login, device-list and MQTT-info responses with every account-specific value replaced: `auth_token`, `user_id`, `email`, nick name, serial (`TESTSN0001`), `thing_name`, `certificate_id`, `certificate_pem`, `private_key`, `public_key`, `aws_root_ca1_pem`, `pkcs12` and any other string that looks like a token or identifier. Keep field names, nesting and value types exactly as the server sent them. Make one live run.
+- [ ] **Step 2: Write the failing tests.** `TestLogin_ReplaysRecordedResponse`, `TestDevices_ReplaysRecordedResponse` and `TestMQTTInfo_ReplaysRecordedResponse` serve each fixture from `httptest` and assert the parsed values (`Device{SN: "TESTSN0001", PN: "A1761"}`, non-empty endpoint, and so on). `TestFixtures_ContainNoSecrets` scans `testdata/` for an at sign inside an email-like string, `BEGIN` PEM blocks with real base64 bodies, and any base64 or hex run of 40 or more characters outside an allow-list, and fails with the file name only.
+- [ ] **Step 3: Counter byte.** Replace the heuristic in `frame.Decode` that treats byte 9 as a counter unless it lies in 0xa0 to 0xa9. Try both alignments (with and without the counter byte) and accept the one whose field walk ends exactly at the checksum byte. If both walk cleanly, prefer without. If neither does, return `ErrLength` with the existing detail. Update `TestDecode_CounterByteInTagRange` to assert success and the right field values, and keep every golden test green.
+- [ ] **Step 4: End-to-end replay.** `TestReplay_FramesToMetrics` feeds every recorded frame from `testdata/frames.jsonl` through the runner with a fake link into a collector with a fixed clock, serves `promhttp` from `httptest`, and asserts the exposition text: `anker_c1000_up 1`, the battery percent, AC output watts, the `device="TESTSN0001"` label, and the info series labels. A second case with the clock moved past `staleAfter` asserts that only `up`, `last_message_age_seconds` and `bad_frames_total` remain.
+- [ ] **Step 5:** Run `go vet ./...`, `go test -race ./...` and golangci-lint. Commit in logical pieces (`fix(frame)`, `test(anker)`, `test(e2e)`, `feat(capture)`).
