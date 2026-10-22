@@ -40,7 +40,7 @@ func main() {
 	trigger := flag.Bool("trigger", false, "publish one realtime trigger (0057) after subscribing")
 	timeout := flag.Int("timeout", 60, "trigger timeout in seconds")
 	recordDir := flag.String("record-api", "", "write sanitised login, device and MQTT-info responses to this directory and exit")
-	rawDir := flag.String("raw-dir", "", "with -record-api, also save the raw bodies here (keep it out of the repository)")
+	rawDir := flag.String("raw-dir", "", "with -record-api, also save the raw bodies here (keep it out of the repository; use raw/, which git ignores)")
 	fromRaw := flag.String("from-raw", "", "with -record-api, sanitise raw bodies saved in this directory instead of logging in")
 	flag.Parse()
 	if *recordDir != "" {
