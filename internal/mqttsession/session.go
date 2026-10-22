@@ -31,9 +31,9 @@ const (
 type Session struct {
 	client  mqtt.Client
 	handler func(topic string, payload []byte)
-	topics  []string
 	onError func(error)
 	lost    chan struct{}
+	topics  []string
 	lostOne sync.Once
 	mu      sync.Mutex
 }
