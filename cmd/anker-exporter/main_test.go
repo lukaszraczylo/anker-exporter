@@ -139,7 +139,7 @@ func env(m map[string]string) func(string) string { return func(k string) string
 
 func TestRun_InvalidTriggerFailsBeforeLogin(t *testing.T) {
 	creds := env(map[string]string{"ANKER_EMAIL": "a@b.c", "ANKER_PASSWORD": "pw"})
-	for _, v := range []string{"0s", "-5s", "500ms"} {
+	for _, v := range []string{"0s", "-5s", "500ms", "29s", "601s", "1h"} {
 		err := run(context.Background(), []string{"-trigger", v, "-listen", "127.0.0.1:0"}, creds, io.Discard)
 		if err == nil || !strings.Contains(err.Error(), "-trigger") {
 			t.Errorf("trigger %s: err = %v", v, err)

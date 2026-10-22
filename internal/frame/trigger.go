@@ -7,23 +7,25 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"time"
 )
 
 const (
-	devicePN          = "A1761"
-	triggerMsgType    = "\x00\x57"
-	framePrefix       = "\xff\x09"
-	sendPattern       = "\x03\x00\x0f"
-	typeUnsignedByte  = 0x01
-	typeVar           = 0x03
-	fieldPattern      = 0xa1
-	fieldEnable       = 0xa2
-	fieldTimeout      = 0xa3
-	fieldTimestamp    = 0xfe
-	cmdPublish        = 17
-	maxTriggerTimeout = math.MaxInt32
+	devicePN         = "A1761"
+	triggerMsgType   = "\x00\x57"
+	framePrefix      = "\xff\x09"
+	sendPattern      = "\x03\x00\x0f"
+	typeUnsignedByte = 0x01
+	typeVar          = 0x03
+	fieldPattern     = 0xa1
+	fieldEnable      = 0xa2
+	fieldTimeout     = 0xa3
+	fieldTimestamp   = 0xfe
+	cmdPublish       = 17
+
+	// MinTriggerTimeout and MaxTriggerTimeout bound the realtime trigger timeout in seconds.
+	MinTriggerTimeout = 30
+	MaxTriggerTimeout = 600
 )
 
 type head struct {
@@ -57,8 +59,8 @@ func BuildTrigger(sn, userID, clientID string, timeoutSec int, now time.Time) ([
 	if sn == "" || userID == "" {
 		return nil, errors.New("trigger: serial and user id are required")
 	}
-	if timeoutSec <= 0 || timeoutSec > maxTriggerTimeout {
-		return nil, fmt.Errorf("trigger: timeout %d out of range", timeoutSec)
+	if timeoutSec < MinTriggerTimeout || timeoutSec > MaxTriggerTimeout {
+		return nil, fmt.Errorf("trigger: timeout %ds out of range %d..%d", timeoutSec, MinTriggerTimeout, MaxTriggerTimeout)
 	}
 	frame := triggerFrame(uint32(timeoutSec), uint32(now.Unix())) //nolint:gosec // bounded above; unix seconds fit 32 bits until 2106
 	pl, err := json.Marshal(payload{DeviceSN: sn, AccountID: userID, Data: base64.StdEncoding.EncodeToString(frame)})

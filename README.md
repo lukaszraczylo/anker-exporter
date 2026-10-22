@@ -48,7 +48,7 @@ To alert on high load, use `anker_c1000_output_power_total_watts > 500`.
 | Flag | Default | Meaning |
 |---|---|---|
 | `-listen` | `:9876` | HTTP listen address. |
-| `-trigger` | `300s` | Realtime trigger timeout. The exporter resends the trigger before it expires. |
+| `-trigger` | `300s` | Realtime trigger timeout, from `30s` to `600s`. The exporter resends the trigger before it expires. |
 | `-stale-after` | `30s` | `anker_c1000_up` goes to 0 when no telemetry frame arrived for this long. |
 | `-print-metrics` | off | Print the metric names and help text, then exit. |
 

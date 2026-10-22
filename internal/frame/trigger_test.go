@@ -109,6 +109,8 @@ func TestBuildTrigger_Errors(t *testing.T) {
 		"zero timeout": {"S", "u", 0},
 		"negative":     {"S", "u", -5},
 		"huge timeout": {"S", "u", 1 << 31},
+		"below min":    {"S", "u", MinTriggerTimeout - 1},
+		"above max":    {"S", "u", MaxTriggerTimeout + 1},
 	}
 	for name, c := range cases {
 		if _, err := BuildTrigger(c.sn, c.user, "cid", c.timeout, now); err == nil {
@@ -121,5 +123,13 @@ func TestHeadClientID(t *testing.T) {
 	got := HeadClientID("anker_power", "u", "c")
 	if got != "android-anker_power-u-c" || strings.Contains(got, " ") {
 		t.Errorf("HeadClientID = %q", got)
+	}
+}
+
+func TestBuildTrigger_AcceptsBounds(t *testing.T) {
+	for _, timeout := range []int{MinTriggerTimeout, 300, MaxTriggerTimeout} {
+		if _, err := BuildTrigger("S", "u", "cid", timeout, time.Unix(1, 0)); err != nil {
+			t.Errorf("timeout %d: %v", timeout, err)
+		}
 	}
 }
