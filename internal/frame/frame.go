@@ -45,8 +45,22 @@ func Decode(envelope []byte) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	return decodeFrame(raw)
+	m, err := decodeFrame(raw)
+	if err != nil {
+		return m, &FrameError{Err: err, Raw: raw}
+	}
+	return m, nil
 }
+
+// FrameError carries the raw frame bytes of a frame that failed to decode.
+type FrameError struct {
+	Err error
+	Raw []byte
+}
+
+func (e *FrameError) Error() string { return e.Err.Error() }
+
+func (e *FrameError) Unwrap() error { return e.Err }
 
 func unwrap(envelope []byte) ([]byte, error) {
 	var env struct {
@@ -81,13 +95,13 @@ func unwrap(envelope []byte) ([]byte, error) {
 
 func decodeFrame(b []byte) (Message, error) {
 	if len(b) < headerLen+1 {
-		return Message{}, ErrLength
+		return Message{}, fmt.Errorf("%w: %d bytes, header needs %d", ErrLength, len(b), headerLen+1)
 	}
 	if b[0] != 0xff || b[1] != 0x09 {
 		return Message{}, ErrPrefix
 	}
-	if int(binary.LittleEndian.Uint16(b[2:4])) != len(b) {
-		return Message{}, ErrLength
+	if n := int(binary.LittleEndian.Uint16(b[2:4])); n != len(b) {
+		return Message{}, fmt.Errorf("%w: length field %d, frame has %d bytes", ErrLength, n, len(b))
 	}
 	var sum byte
 	for _, v := range b[:len(b)-1] {
@@ -115,11 +129,11 @@ func decodeFrame(b []byte) (Message, error) {
 func decodeFields(body []byte, msg *Message) error {
 	for len(body) > 0 {
 		if len(body) < 2 {
-			return ErrLength
+			return fmt.Errorf("%w: field header cut off, %d byte left", ErrLength, len(body))
 		}
 		tag, n := body[0], int(body[1])
 		if len(body) < 2+n {
-			return ErrLength
+			return fmt.Errorf("%w: field %#02x wants %d bytes, %d left", ErrLength, tag, n, len(body)-2)
 		}
 		data := body[2 : 2+n]
 		body = body[2+n:]

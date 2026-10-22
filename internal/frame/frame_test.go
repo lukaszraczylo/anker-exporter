@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -293,5 +294,28 @@ func TestA1761Fields_OrderedAndUnique(t *testing.T) {
 	}
 	if seen["device_sn"] || seen["sw_version"] {
 		t.Error("text fields must not be metric fields")
+	}
+}
+
+func TestDecode_ErrorDetailAndRaw(t *testing.T) {
+	b := rawFrame(t, loadCapture(t)[0])
+	_, err := Decode(wrap(t, b[:len(b)-1]))
+	if !errors.Is(err, ErrLength) {
+		t.Fatalf("err = %v", err)
+	}
+	if !strings.Contains(err.Error(), "length field") {
+		t.Errorf("no detail in %q", err)
+	}
+	var fe *FrameError
+	if !errors.As(err, &fe) || len(fe.Raw) != len(b)-1 {
+		t.Fatalf("FrameError = %+v", fe)
+	}
+}
+
+// Known limitation: a counter byte in 0xa0-0xa9 is read as a field tag, so the frame fails with ErrLength.
+func TestDecode_CounterByteInTagRange(t *testing.T) {
+	f := buildFrame("0405", []byte{0xa3}, fld(0xc1, 0x01, 42))
+	if _, err := Decode(wrap(t, f)); !errors.Is(err, ErrLength) {
+		t.Fatalf("err = %v, want ErrLength from the mis-sliced counter byte", err)
 	}
 }
