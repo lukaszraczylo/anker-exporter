@@ -84,3 +84,22 @@ func TestConnect_EmptyEndpoint(t *testing.T) {
 		t.Error("expected error")
 	}
 }
+
+func TestTopics(t *testing.T) {
+	if got := TelemetryTopic("anker_power", "SN1"); got != "dt/anker_power/A1761/SN1/#" {
+		t.Errorf("telemetry = %q", got)
+	}
+	if got := CommandTopic("anker_power", "SN1"); got != "cmd/anker_power/A1761/SN1/req" {
+		t.Errorf("command = %q", got)
+	}
+}
+
+func TestSubscribeDedupesResubscribeList(t *testing.T) {
+	s := &Session{}
+	s.addTopic("a")
+	s.addTopic("a")
+	s.addTopic("b")
+	if len(s.topics) != 2 {
+		t.Errorf("topics = %v, want 2 unique", s.topics)
+	}
+}

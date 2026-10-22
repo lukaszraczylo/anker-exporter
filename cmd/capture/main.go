@@ -106,8 +106,7 @@ func run(dur time.Duration, out string, trigger bool, timeoutSec int) error {
 	}
 	defer sess.Close()
 
-	sub := "dt/" + info.AppName + "/" + "A1761" + "/" + sn + "/#"
-	if err := sess.Subscribe(sub); err != nil {
+	if err := sess.Subscribe(mqttsession.TelemetryTopic(info.AppName, sn)); err != nil {
 		return err
 	}
 	log.Printf("subscribed to dt/%s/A1761/<sn>/#", info.AppName)
@@ -117,7 +116,7 @@ func run(dur time.Duration, out string, trigger bool, timeoutSec int) error {
 		if err != nil {
 			return err
 		}
-		if err := sess.Publish("cmd/"+info.AppName+"/A1761/"+sn+"/req", msg); err != nil {
+		if err := sess.Publish(mqttsession.CommandTopic(info.AppName, sn), msg); err != nil {
 			return err
 		}
 		log.Printf("published realtime trigger, timeout %ds", timeoutSec)

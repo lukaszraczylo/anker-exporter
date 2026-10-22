@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"slices"
 	"sync"
 	"time"
 
@@ -31,8 +32,17 @@ type Session struct {
 	client  mqtt.Client
 	handler func(topic string, payload []byte)
 	topics  []string
+	onError func(error)
+	lost    chan struct{}
+	lostOne sync.Once
 	mu      sync.Mutex
 }
+
+// Option tunes Connect.
+type Option func(*Session)
+
+// WithOnError reports failures that have no caller to return to, such as a resubscribe after a reconnect.
+func WithOnError(f func(error)) Option { return func(s *Session) { s.onError = f } }
 
 // ClientID returns {thingName}_{5 random digits}.
 func ClientID(thingName string) (string, error) {
@@ -62,7 +72,7 @@ func TLSConfig(info anker.MQTTInfo) (*tls.Config, error) {
 }
 
 // Connect opens the session. handler runs for every message on a subscribed topic.
-func Connect(ctx context.Context, info anker.MQTTInfo, handler func(topic string, payload []byte)) (*Session, error) {
+func Connect(ctx context.Context, info anker.MQTTInfo, handler func(topic string, payload []byte), options ...Option) (*Session, error) {
 	if info.Endpoint == "" {
 		return nil, errors.New("mqtt: empty endpoint")
 	}
@@ -74,7 +84,10 @@ func Connect(ctx context.Context, info anker.MQTTInfo, handler func(topic string
 	if err != nil {
 		return nil, err
 	}
-	s := &Session{handler: handler}
+	s := &Session{handler: handler, lost: make(chan struct{})}
+	for _, o := range options {
+		o(s)
+	}
 	opts := mqtt.NewClientOptions().
 		AddBroker("ssl://" + net.JoinHostPort(info.Endpoint, brokerPort)).
 		SetClientID(id).
@@ -82,6 +95,7 @@ func Connect(ctx context.Context, info anker.MQTTInfo, handler func(topic string
 		SetCleanSession(true).
 		SetAutoReconnect(true).
 		SetConnectTimeout(connectTimeout).
+		SetConnectionLostHandler(func(mqtt.Client, error) { s.lostOne.Do(func() { close(s.lost) }) }).
 		SetOnConnectHandler(func(c mqtt.Client) { s.resubscribe(c) })
 	s.client = mqtt.NewClient(opts)
 	tok := s.client.Connect()
@@ -96,17 +110,28 @@ func (s *Session) resubscribe(c mqtt.Client) {
 	topics := append([]string(nil), s.topics...)
 	s.mu.Unlock()
 	for _, t := range topics {
-		c.Subscribe(t, qosAtMostOnce, s.onMessage)
+		if err := wait(context.Background(), c.Subscribe(t, qosAtMostOnce, s.onMessage), opTimeout); err != nil && s.onError != nil {
+			s.onError(fmt.Errorf("mqtt resubscribe %s: %w", t, err))
+		}
 	}
 }
 
+// Lost is closed when the broker connection drops.
+func (s *Session) Lost() <-chan struct{} { return s.lost }
+
 func (s *Session) onMessage(_ mqtt.Client, m mqtt.Message) { s.handler(m.Topic(), m.Payload()) }
+
+func (s *Session) addTopic(topic string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !slices.Contains(s.topics, topic) {
+		s.topics = append(s.topics, topic)
+	}
+}
 
 // Subscribe subscribes to topic and keeps it across reconnects.
 func (s *Session) Subscribe(topic string) error {
-	s.mu.Lock()
-	s.topics = append(s.topics, topic)
-	s.mu.Unlock()
+	s.addTopic(topic)
 	if err := wait(context.Background(), s.client.Subscribe(topic, qosAtMostOnce, s.onMessage), opTimeout); err != nil {
 		return fmt.Errorf("mqtt subscribe %s: %w", topic, err)
 	}
