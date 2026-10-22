@@ -51,6 +51,7 @@ type Runner struct {
 }
 
 // NewRunner returns a Runner that triggers realtime telemetry with the given timeout.
+// onMessage can fire shortly after Run returns, while the closing session drains.
 func NewRunner(api TokenSource, sn string, trigger time.Duration, onMessage func(frame.Message)) *Runner {
 	r := &Runner{
 		api: api, sn: sn, trigger: trigger, onMessage: onMessage,

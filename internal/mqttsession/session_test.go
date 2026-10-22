@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -101,5 +102,19 @@ func TestSubscribeDedupesResubscribeList(t *testing.T) {
 	s.addTopic("b")
 	if len(s.topics) != 2 {
 		t.Errorf("topics = %v, want 2 unique", s.topics)
+	}
+}
+
+func TestClientOptions_NoAutoReconnectAndKeepalive(t *testing.T) {
+	s := &Session{lost: make(chan struct{})}
+	o := s.clientOptions("example.invalid", "id", &tls.Config{MinVersion: tls.VersionTLS12})
+	if o.AutoReconnect {
+		t.Error("auto reconnect must be off")
+	}
+	if o.KeepAlive != 30 || o.PingTimeout != 10*time.Second {
+		t.Errorf("keepalive %d ping timeout %v", o.KeepAlive, o.PingTimeout)
+	}
+	if len(o.Servers) != 1 || o.Servers[0].Host != "example.invalid:8883" {
+		t.Errorf("servers %v", o.Servers)
 	}
 }

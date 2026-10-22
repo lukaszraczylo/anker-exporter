@@ -25,6 +25,8 @@ const (
 	opTimeout      = 10 * time.Second
 	qosAtMostOnce  = 0
 	clientIDDigits = 100000
+	keepAlive      = 30 * time.Second
+	pingTimeout    = 10 * time.Second
 )
 
 // Session is a connected MQTT client. Subscriptions are restored after a reconnect.
@@ -88,21 +90,29 @@ func Connect(ctx context.Context, info anker.MQTTInfo, handler func(topic string
 	for _, o := range options {
 		o(s)
 	}
-	opts := mqtt.NewClientOptions().
-		AddBroker("ssl://" + net.JoinHostPort(info.Endpoint, brokerPort)).
-		SetClientID(id).
-		SetTLSConfig(tlsCfg).
-		SetCleanSession(true).
-		SetAutoReconnect(true).
-		SetConnectTimeout(connectTimeout).
-		SetConnectionLostHandler(func(mqtt.Client, error) { s.lostOne.Do(func() { close(s.lost) }) }).
-		SetOnConnectHandler(func(c mqtt.Client) { s.resubscribe(c) })
+	opts := s.clientOptions(info.Endpoint, id, tlsCfg)
 	s.client = mqtt.NewClient(opts)
 	tok := s.client.Connect()
 	if err := wait(ctx, tok, connectTimeout+opTimeout); err != nil {
 		return nil, fmt.Errorf("mqtt connect: %w", err)
 	}
 	return s, nil
+}
+
+// clientOptions disables Paho auto-reconnect: the runner reconnects with fresh credentials,
+// and a second reconnect path would race it. Keepalive plus ping timeout detect a dead link in ~40 s.
+func (s *Session) clientOptions(endpoint, id string, tlsCfg *tls.Config) *mqtt.ClientOptions {
+	return mqtt.NewClientOptions().
+		AddBroker("ssl://" + net.JoinHostPort(endpoint, brokerPort)).
+		SetClientID(id).
+		SetTLSConfig(tlsCfg).
+		SetCleanSession(true).
+		SetAutoReconnect(false).
+		SetKeepAlive(keepAlive).
+		SetPingTimeout(pingTimeout).
+		SetConnectTimeout(connectTimeout).
+		SetConnectionLostHandler(func(mqtt.Client, error) { s.lostOne.Do(func() { close(s.lost) }) }).
+		SetOnConnectHandler(func(c mqtt.Client) { s.resubscribe(c) })
 }
 
 func (s *Session) resubscribe(c mqtt.Client) {
