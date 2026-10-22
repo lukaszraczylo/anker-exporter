@@ -23,6 +23,16 @@ const (
 	remainingTimeHelp  = "Device estimate of remaining runtime in hours; unverified and unreliable (raw values up to 6634 at 100% SOC)"
 	timestampField     = "msg_timestamp"
 	timestampHelp      = "Device message timestamp as unix time in seconds, not a duration"
+
+	outputPowerField = "output_power_total"
+	// hoursPerMonth is the average month: 365 * 24 / 12.
+	hoursPerMonth = 730
+
+	priceName = namespace + "_energy_price_per_kwh"
+	priceHelp = "Configured price of one kWh"
+	costName  = namespace + "_projected_monthly_cost"
+	costHelp  = "Projected cost of one month at the current output power, ignoring conversion losses"
+	currency  = "currency"
 )
 
 type gaugeSpec struct {
@@ -39,18 +49,37 @@ type Collector struct {
 	up         *prometheus.Desc
 	age        *prometheus.Desc
 	bad        *prometheus.Desc
+	priceDesc  *prometheus.Desc
+	costDesc   *prometheus.Desc
 	values     map[string]float64
 	strings    map[string]string
 	device     string
+	currency   string
 	gauges     []gaugeSpec
 	staleAfter time.Duration
 	badFrames  float64
+	price      float64
 	mu         sync.Mutex
 	hasFrame   bool
 }
 
+// Option configures optional collector features.
+type Option func(*Collector)
+
+// WithPrice enables the cost metrics. A price of 0 or less leaves them off.
+func WithPrice(perKWh float64, cur string) Option {
+	return func(c *Collector) {
+		if perKWh <= 0 {
+			return
+		}
+		c.price, c.currency = perKWh, cur
+		c.priceDesc = prometheus.NewDesc(priceName, priceHelp, []string{currency}, nil)
+		c.costDesc = prometheus.NewDesc(costName, costHelp, []string{deviceLabel, currency}, nil)
+	}
+}
+
 // New builds a collector for one device serial.
-func New(device string, staleAfter time.Duration, now func() time.Time) *Collector {
+func New(device string, staleAfter time.Duration, now func() time.Time, opts ...Option) *Collector {
 	c := &Collector{
 		device:     device,
 		staleAfter: staleAfter,
@@ -58,6 +87,9 @@ func New(device string, staleAfter time.Duration, now func() time.Time) *Collect
 		up:         prometheus.NewDesc(namespace+"_up", "1 if a telemetry frame arrived within the staleness window, else 0", []string{deviceLabel}, nil),
 		age:        prometheus.NewDesc(namespace+"_last_message_age_seconds", "Seconds since the last accepted telemetry frame", []string{deviceLabel}, nil),
 		bad:        prometheus.NewDesc(namespace+"_bad_frames_total", "Frames that failed to decode", []string{deviceLabel}, nil),
+	}
+	for _, o := range opts {
+		o(c)
 	}
 	for _, f := range frame.A1761Fields() {
 		help := f.Help
@@ -123,6 +155,9 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	defer c.mu.Unlock()
 
 	ch <- prometheus.MustNewConstMetric(c.bad, prometheus.CounterValue, c.badFrames, c.device)
+	if c.priceDesc != nil {
+		ch <- prometheus.MustNewConstMetric(c.priceDesc, prometheus.GaugeValue, c.price, c.currency)
+	}
 	if !c.hasFrame {
 		ch <- prometheus.MustNewConstMetric(c.up, prometheus.GaugeValue, 0, c.device)
 		return
@@ -142,7 +177,17 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 		}
 		ch <- prometheus.MustNewConstMetric(g.desc, prometheus.GaugeValue, v, c.device)
 	}
+	c.collectCost(ch)
 	c.collectInfo(ch)
+}
+
+func (c *Collector) collectCost(ch chan<- prometheus.Metric) {
+	watts, ok := c.values[outputPowerField]
+	if c.costDesc == nil || !ok {
+		return
+	}
+	cost := watts / 1000 * hoursPerMonth * c.price
+	ch <- prometheus.MustNewConstMetric(c.costDesc, prometheus.GaugeValue, cost, c.device, c.currency)
 }
 
 func (c *Collector) collectInfo(ch chan<- prometheus.Metric) {
@@ -170,6 +215,9 @@ func (c *Collector) MetricList() []string {
 	}
 	for _, g := range c.gauges {
 		out = append(out, g.name+"\t"+g.help)
+	}
+	if c.priceDesc != nil {
+		out = append(out, priceName+"\t"+priceHelp, costName+"\t"+costHelp)
 	}
 	return out
 }

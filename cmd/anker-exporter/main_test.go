@@ -176,3 +176,43 @@ func TestBadFrameAttrs(t *testing.T) {
 		t.Errorf("hex prefix longer than 16 bytes: %s", got)
 	}
 }
+
+func TestRun_PrintMetricsListsCostOnlyWhenPriced(t *testing.T) {
+	var off, on strings.Builder
+	if err := run(context.Background(), []string{"-print-metrics"}, env(nil), &off); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(off.String(), "projected_monthly_cost") {
+		t.Error("cost metrics listed with feature off")
+	}
+	if err := run(context.Background(), []string{"-print-metrics"}, env(map[string]string{"ANKER_PRICE_PER_KWH": "0.25"}), &on); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"anker_c1000_projected_monthly_cost", "anker_c1000_energy_price_per_kwh"} {
+		if !strings.Contains(on.String(), want) {
+			t.Errorf("env price: %s not listed", want)
+		}
+	}
+	on.Reset()
+	if err := run(context.Background(), []string{"-print-metrics", "-price-per-kwh", "0.3", "-currency", "usd"}, env(nil), &on); err != nil || !strings.Contains(on.String(), "projected_monthly_cost") {
+		t.Fatalf("flags: err=%v out=%q", err, on.String())
+	}
+}
+
+func TestRun_InvalidPricingFailsBeforeLogin(t *testing.T) {
+	e := map[string]string{"ANKER_EMAIL": "a@b.c", "ANKER_PASSWORD": "pw"}
+	for _, args := range [][]string{
+		{"-price-per-kwh", "-1"},
+		{"-price-per-kwh", "abc"},
+		{"-price-per-kwh", "0.25", "-currency", "GB"},
+	} {
+		err := run(context.Background(), args, env(e), io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "ANKER_") {
+			t.Errorf("args %v: err = %v", args, err)
+		}
+	}
+	envBad := map[string]string{"ANKER_EMAIL": "a@b.c", "ANKER_PASSWORD": "pw", "ANKER_PRICE_PER_KWH": "NaN"}
+	if err := run(context.Background(), nil, env(envBad), io.Discard); err == nil {
+		t.Error("NaN env price accepted")
+	}
+}

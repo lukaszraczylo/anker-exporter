@@ -62,3 +62,49 @@ func TestConfigString_RedactsPassword(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePricing(t *testing.T) {
+	cases := []struct {
+		name, price, currency string
+		want                  Pricing
+	}{
+		{"off", "", "", Pricing{}},
+		{"currency without price is a no-op", "", "usd", Pricing{}},
+		{"default currency", "0.25", "", Pricing{PerKWh: 0.25, Currency: "GBP"}},
+		{"currency upper-cased", "0.3", "eur", Pricing{PerKWh: 0.3, Currency: "EUR"}},
+		{"whitespace trimmed", " 1.5 ", " usd ", Pricing{PerKWh: 1.5, Currency: "USD"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParsePricing(tc.price, tc.currency)
+			if err != nil || got != tc.want {
+				t.Fatalf("got %+v, %v; want %+v", got, err, tc.want)
+			}
+			if got.Enabled() != (tc.want.PerKWh > 0) {
+				t.Fatalf("Enabled() = %v", got.Enabled())
+			}
+		})
+	}
+}
+
+func TestParsePricing_Invalid(t *testing.T) {
+	cases := []struct{ name, price, currency, wantInErr string }{
+		{"non-numeric", "cheap", "", "ANKER_PRICE_PER_KWH"},
+		{"zero", "0", "", "ANKER_PRICE_PER_KWH"},
+		{"negative", "-0.1", "", "ANKER_PRICE_PER_KWH"},
+		{"NaN", "NaN", "", "ANKER_PRICE_PER_KWH"},
+		{"Inf", "+Inf", "", "ANKER_PRICE_PER_KWH"},
+		{"short currency", "0.25", "GB", "ANKER_CURRENCY"},
+		{"long currency", "0.25", "GBPX", "ANKER_CURRENCY"},
+		{"digit currency", "0.25", "G8P", "ANKER_CURRENCY"},
+		{"non-ASCII currency", "0.25", "£££", "ANKER_CURRENCY"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParsePricing(tc.price, tc.currency)
+			if err == nil || !strings.Contains(err.Error(), tc.wantInErr) {
+				t.Fatalf("err = %v, want mention of %s", err, tc.wantInErr)
+			}
+		})
+	}
+}

@@ -4,6 +4,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 )
 
@@ -11,6 +13,9 @@ const (
 	defaultRegion  = "eu"
 	defaultCountry = "GB"
 	redacted       = "[redacted]"
+
+	defaultCurrency = "GBP"
+	currencyLen     = 3
 )
 
 var apiHosts = map[string]string{
@@ -26,6 +31,33 @@ type Config struct {
 	Country  string
 	BaseURL  string
 	DeviceSN string
+}
+
+// Pricing holds the optional electricity price; the zero value means the cost projection is off.
+type Pricing struct {
+	Currency string
+	PerKWh   float64
+}
+
+// Enabled reports whether a price is set.
+func (p Pricing) Enabled() bool { return p.PerKWh > 0 }
+
+// ParsePricing validates the price and currency strings. An empty price turns the feature off
+// and ignores the currency.
+func ParsePricing(price, currency string) (Pricing, error) {
+	price, currency = strings.TrimSpace(price), strings.TrimSpace(currency)
+	if price == "" {
+		return Pricing{}, nil
+	}
+	v, err := strconv.ParseFloat(price, 64)
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) || v <= 0 {
+		return Pricing{}, fmt.Errorf("ANKER_PRICE_PER_KWH %q must be a number greater than 0", price)
+	}
+	cur := strings.ToUpper(orDefault(currency, defaultCurrency))
+	if len(cur) != currencyLen || strings.Trim(cur, "ABCDEFGHIJKLMNOPQRSTUVWXYZ") != "" {
+		return Pricing{}, fmt.Errorf("ANKER_CURRENCY %q must be 3 letters", currency)
+	}
+	return Pricing{PerKWh: v, Currency: cur}, nil
 }
 
 // Load reads the settings through getenv.

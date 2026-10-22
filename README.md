@@ -48,12 +48,16 @@ To alert on high load, use `anker_c1000_output_power_total_watts > 500`.
 | `ANKER_REGION` | `eu` | API region: `eu` or `com`. |
 | `ANKER_COUNTRY` | `GB` | Country code sent at login. |
 | `ANKER_DEVICE_SN` | empty | Device serial. If empty, the exporter uses the only A1761 on the account. It stops if there are none or several. |
+| `ANKER_PRICE_PER_KWH` | empty | Price of one kWh, a number greater than 0. If empty, the cost metrics stay off. |
+| `ANKER_CURRENCY` | `GBP` | Currency code of the price: 3 letters, any case. The exporter ignores it when no price is set. |
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `-listen` | `:9876` | HTTP listen address. |
 | `-trigger` | `300s` | Realtime trigger timeout, from `30s` to `600s`. The exporter resends the trigger before it expires. |
 | `-stale-after` | `30s` | `anker_c1000_up` goes to 0 when no telemetry frame arrived for this long. |
+| `-price-per-kwh` | `ANKER_PRICE_PER_KWH` | Same as the variable. The flag wins. |
+| `-currency` | `ANKER_CURRENCY` | Same as the variable. The flag wins. |
 | `-print-metrics` | off | Print the metric names and help text, then exit. |
 
 ## Endpoints
@@ -74,6 +78,17 @@ Every device metric carries a `device` label with the serial. Run `anker-exporte
 - Status and settings: port states, switches, modes, timeouts and limits, all prefixed with `anker_c1000_`.
 
 When a frame is older than `-stale-after`, the exporter drops all device metrics except `up`, `last_message_age_seconds` and `bad_frames_total`.
+
+## Cost projection
+
+Set `ANKER_PRICE_PER_KWH` to enable two more metrics. The exporter fails at startup, before the login, if the price or currency is invalid.
+
+- `anker_c1000_energy_price_per_kwh{currency}`: the configured price. It stays while the device data is stale.
+- `anker_c1000_projected_monthly_cost{device,currency}`: the cost of one month at the current output power. The exporter drops it when the frame is stale.
+
+The projection is `output_power_total_watts / 1000 * 730 * price`. 730 hours is the average month. It uses the output power, which is what the load consumes. It ignores conversion losses and tariff changes. The real cost from the wall can be higher.
+
+With `-print-metrics`, the two metrics appear only when a price is set.
 
 ## Warning: remaining time is unverified
 

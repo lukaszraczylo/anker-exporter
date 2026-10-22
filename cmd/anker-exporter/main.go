@@ -52,6 +52,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 	listen := fs.String("listen", ":9876", "HTTP listen address")
 	trigger := fs.Duration("trigger", 300*time.Second, "realtime trigger timeout; the exporter resends it before it expires")
 	stale := fs.Duration("stale-after", 30*time.Second, "anker_c1000_up goes 0 when no telemetry frame arrived for this long")
+	price := fs.String("price-per-kwh", getenv("ANKER_PRICE_PER_KWH"), "price of one kWh; enables the projected cost metrics")
+	currency := fs.String("currency", getenv("ANKER_CURRENCY"), "currency code for the price (default GBP when a price is set)")
 	printMetrics := fs.Bool("print-metrics", false, "print the metric names and help text, then exit")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -59,13 +61,17 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 		}
 		return err
 	}
+	pricing, err := config.ParsePricing(*price, *currency)
+	if err != nil {
+		return err
+	}
 	if *printMetrics {
-		for _, line := range collector.New("SN", *stale, time.Now).MetricList() {
+		for _, line := range collector.New("SN", *stale, time.Now, collector.WithPrice(pricing.PerKWh, pricing.Currency)).MetricList() {
 			_, _ = fmt.Fprintln(stdout, line)
 		}
 		return nil
 	}
-	if err := validateTrigger(*trigger); err != nil {
+	if err = validateTrigger(*trigger); err != nil {
 		return err
 	}
 	cfg, err := config.Load(getenv)
@@ -77,7 +83,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout 
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	return serve(ctx, log, *listen, reg, func(ctx context.Context) error {
-		return work(ctx, log, cfg, reg, *trigger, *stale)
+		return work(ctx, log, cfg, pricing, reg, *trigger, *stale)
 	})
 }
 
@@ -136,7 +142,7 @@ func newMux(reg *prometheus.Registry) *http.ServeMux {
 
 // work logs in, then runs the MQTT runner until ctx ends. Setup failures back off, so a slow or
 // rejecting cloud API never takes the HTTP endpoint away.
-func work(ctx context.Context, log *slog.Logger, cfg config.Config, reg prometheus.Registerer, trigger, stale time.Duration) error {
+func work(ctx context.Context, log *slog.Logger, cfg config.Config, pricing config.Pricing, reg prometheus.Registerer, trigger, stale time.Duration) error {
 	cl, err := anker.NewClient(cfg.BaseURL, cfg.Email, cfg.Password, cfg.Country, nil)
 	if err != nil {
 		return err
@@ -147,7 +153,7 @@ func work(ctx context.Context, log *slog.Logger, cfg config.Config, reg promethe
 	}
 	log.Info("device selected", "serial", config.MaskSN(sn))
 
-	col := collector.New(sn, stale, time.Now)
+	col := collector.New(sn, stale, time.Now, collector.WithPrice(pricing.PerKWh, pricing.Currency))
 	if err = col.Register(reg); err != nil {
 		return err
 	}

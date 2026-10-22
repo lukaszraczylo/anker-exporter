@@ -306,3 +306,130 @@ func TestCollector_ConcurrentUpdateCollect(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+const priceTestSN = "TESTSN0001"
+
+func newPricedCollector(t *testing.T, price float64) (*Collector, *clock, *prometheus.Registry) {
+	t.Helper()
+	clk := &clock{t: time.Unix(1_800_000_000, 0)}
+	c := New(priceTestSN, stale, clk.now, WithPrice(price, "GBP"))
+	reg := prometheus.NewRegistry()
+	if err := c.Register(reg); err != nil {
+		t.Fatal(err)
+	}
+	return c, clk, reg
+}
+
+func pricedMessage(t *testing.T, watts float64) frame.Message {
+	t.Helper()
+	m := realMessage(t)
+	m.Values = copyValues(m.Values)
+	m.Values["output_power_total"] = watts
+	return m
+}
+
+func seriesLabels(t *testing.T, reg *prometheus.Registry, name string) map[string]string {
+	t.Helper()
+	mfs, err := reg.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != name {
+			continue
+		}
+		labels := map[string]string{}
+		for _, l := range mf.GetMetric()[0].GetLabel() {
+			labels[l.GetName()] = l.GetValue()
+		}
+		return labels
+	}
+	return nil
+}
+
+func TestCollector_ProjectedMonthlyCost(t *testing.T) {
+	c, _, reg := newPricedCollector(t, 0.25)
+	c.Update(pricedMessage(t, 500))
+
+	// 500 W = 0.5 kW; 0.5 * 730 h * 0.25 = 91.25
+	if v, ok := gaugeValue(t, reg, "anker_c1000_projected_monthly_cost"); !ok || v != 91.25 {
+		t.Fatalf("cost = %v,%v want 91.25", v, ok)
+	}
+	got := seriesLabels(t, reg, "anker_c1000_projected_monthly_cost")
+	if len(got) != 2 || got["device"] != priceTestSN || got["currency"] != "GBP" {
+		t.Errorf("cost labels = %v", got)
+	}
+	if v, ok := gaugeValue(t, reg, "anker_c1000_energy_price_per_kwh"); !ok || v != 0.25 {
+		t.Fatalf("price = %v,%v", v, ok)
+	}
+	got = seriesLabels(t, reg, "anker_c1000_energy_price_per_kwh")
+	if len(got) != 1 || got["currency"] != "GBP" {
+		t.Errorf("price labels = %v", got)
+	}
+}
+
+func TestCollector_NoCostMetricsWhenPriceUnset(t *testing.T) {
+	c, _, reg := newTestCollector(t)
+	c.Update(pricedMessage(t, 500))
+	n := names(t, reg)
+	for _, name := range []string{"anker_c1000_projected_monthly_cost", "anker_c1000_energy_price_per_kwh"} {
+		if n[name] {
+			t.Errorf("%s exposed with feature off", name)
+		}
+	}
+	c2 := New("SN", stale, time.Now, WithPrice(0, "GBP"))
+	for _, line := range c2.MetricList() {
+		if strings.Contains(line, "energy_price") || strings.Contains(line, "projected_monthly_cost") {
+			t.Errorf("zero price lists %q", line)
+		}
+	}
+}
+
+func TestCollector_CostDroppedWhenStalePriceStays(t *testing.T) {
+	c, clk, reg := newPricedCollector(t, 0.25)
+	c.Update(pricedMessage(t, 500))
+	clk.advance(stale + time.Second)
+	if _, ok := gaugeValue(t, reg, "anker_c1000_projected_monthly_cost"); ok {
+		t.Error("stale scrape still exposes cost")
+	}
+	if v, ok := gaugeValue(t, reg, "anker_c1000_energy_price_per_kwh"); !ok || v != 0.25 {
+		t.Errorf("price when stale = %v,%v", v, ok)
+	}
+}
+
+func TestCollector_PriceExposedBeforeFirstFrame(t *testing.T) {
+	_, _, reg := newPricedCollector(t, 0.25)
+	if v, ok := gaugeValue(t, reg, "anker_c1000_energy_price_per_kwh"); !ok || v != 0.25 {
+		t.Fatalf("price before first frame = %v,%v", v, ok)
+	}
+	if names(t, reg)["anker_c1000_projected_monthly_cost"] {
+		t.Error("cost exposed without a frame")
+	}
+}
+
+func TestCollector_CostFollowsOutputPowerAbsence(t *testing.T) {
+	c, _, reg := newPricedCollector(t, 0.25)
+	m := realMessage(t)
+	m.Values = copyValues(m.Values)
+	delete(m.Values, "output_power_total")
+	c.Update(m)
+	if _, ok := gaugeValue(t, reg, "anker_c1000_projected_monthly_cost"); ok {
+		t.Error("cost exposed without output power")
+	}
+	if _, ok := gaugeValue(t, reg, "anker_c1000_energy_price_per_kwh"); !ok {
+		t.Error("price must stay")
+	}
+}
+
+func TestCollector_MetricListCostOnlyWhenPriced(t *testing.T) {
+	c, _, _ := newPricedCollector(t, 0.25)
+	list := strings.Join(c.MetricList(), "\n")
+	for _, want := range []string{"anker_c1000_energy_price_per_kwh\t", "anker_c1000_projected_monthly_cost\tProjected cost of one month at the current output power, ignoring conversion losses"} {
+		if !strings.Contains(list, want) {
+			t.Errorf("MetricList lacks %q", want)
+		}
+	}
+	if strings.Contains(strings.Join(New("SN", stale, time.Now).MetricList(), "\n"), "projected_monthly_cost") {
+		t.Error("MetricList lists cost with feature off")
+	}
+}
