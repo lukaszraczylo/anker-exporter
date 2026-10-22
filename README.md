@@ -35,6 +35,10 @@ and anker_c1000_output_power_total_watts > 20
 
 To alert on high load, use `anker_c1000_output_power_total_watts > 500`.
 
+## Grafana dashboard
+
+[examples/grafana-dashboard.json](examples/grafana-dashboard.json) is an example dashboard. In Grafana, choose Dashboards, New, Import, then upload the file and pick your Prometheus-compatible data source. The runtime panel uses the computed runtime above.
+
 ## Configuration
 
 | Variable | Default | Meaning |
