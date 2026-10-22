@@ -21,6 +21,20 @@ docker run --rm -e ANKER_EMAIL -e ANKER_PASSWORD -p 9876:9876 anker-exporter:dev
 
 The login is slow, about 22 seconds in testing. The metrics appear after the first telemetry frame arrives.
 
+## Prometheus and alerting
+
+Scrape `/metrics` every 15 to 30 seconds. The exporter caches the latest frame, so scraping sends no request to Anker.
+
+The device value `anker_c1000_remaining_time_hours` is unreliable. To alert on remaining runtime, compute it from the charge and the output power. This example uses 1056 Wh per battery pack and ignores expansion packs:
+
+```promql
+anker_c1000_main_battery_soc_percent / 100 * 1056
+  / anker_c1000_output_power_total_watts * 60 < 15
+and anker_c1000_output_power_total_watts > 20
+```
+
+To alert on high load, use `anker_c1000_output_power_total_watts > 500`.
+
 ## Configuration
 
 | Variable | Default | Meaning |
@@ -71,3 +85,9 @@ When a frame is older than `-stale-after`, the exporter drops all device metrics
 - After a network error or timeout, the exporter retries after 30 seconds and doubles the delay up to 5 minutes.
 - While setup fails, `/healthz` stays up and the device metrics are absent.
 - The exporter sends one command to the device: the realtime telemetry trigger. It sends no other command.
+
+## Licence
+
+The project uses the MIT licence. See [LICENSE](LICENSE).
+
+Anker and SOLIX are trademarks of their owners. This project has no affiliation with Anker.
