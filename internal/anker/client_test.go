@@ -154,3 +154,13 @@ func TestDevices_FiltersA1761(t *testing.T) {
 		t.Errorf("got %+v", got)
 	}
 }
+
+func TestNewClient_DefaultTimeout(t *testing.T) {
+	c, err := NewClient("https://x.invalid", "e", "p", "GB", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.httpc.Timeout != DefaultTimeout {
+		t.Fatalf("timeout %v", c.httpc.Timeout)
+	}
+}

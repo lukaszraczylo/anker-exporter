@@ -50,6 +50,9 @@ type envelope struct {
 	Code int             `json:"code"`
 }
 
+// DefaultTimeout covers the login endpoint, which answered in about 22 s in testing.
+const DefaultTimeout = 120 * time.Second
+
 var errExpired = errors.New("token rejected")
 
 // NewClient builds a client for the API at baseURL. httpc may be nil.
@@ -58,7 +61,7 @@ func NewClient(baseURL, email, password, country string, httpc *http.Client) (*C
 		return nil, errors.New("base URL, email and password are required")
 	}
 	if httpc == nil {
-		httpc = &http.Client{Timeout: 30 * time.Second}
+		httpc = &http.Client{Timeout: DefaultTimeout}
 	}
 	return &Client{base: strings.TrimRight(baseURL, "/"), email: email, password: password, country: country, httpc: httpc}, nil
 }
