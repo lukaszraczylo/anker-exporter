@@ -66,5 +66,8 @@ When a frame is older than `-stale-after`, the exporter drops all device metrics
 - The exporter uses a private Anker API. Anker can change it or block it without notice.
 - Using the private API can conflict with the Anker terms of service. You must check the terms and decide for yourself.
 - The exporter stores your account password in its environment. Keep it out of images, logs and version control.
-- The cloud login is slow. A wrong password makes the exporter retry every 30 seconds, which can lock the account.
+- The cloud login is slow.
+- If Anker rejects the login, the exporter retries after 5 minutes and doubles the delay up to 1 hour. After 5 rejections in a row it exits with an error, so repeated bad logins cannot lock your account.
+- After a network error or timeout, the exporter retries after 30 seconds and doubles the delay up to 5 minutes.
+- While setup fails, `/healthz` stays up and the device metrics are absent.
 - The exporter sends one command to the device: the realtime telemetry trigger. It sends no other command.

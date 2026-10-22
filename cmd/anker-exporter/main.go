@@ -3,9 +3,12 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -20,77 +23,105 @@ import (
 	"github.com/lukaszraczylo/anker-exporter/internal/anker"
 	"github.com/lukaszraczylo/anker-exporter/internal/collector"
 	"github.com/lukaszraczylo/anker-exporter/internal/config"
+	"github.com/lukaszraczylo/anker-exporter/internal/frame"
 	"github.com/lukaszraczylo/anker-exporter/internal/mqttsession"
 )
 
 const (
 	shutdownTimeout   = 10 * time.Second
 	readHeaderTimeout = 10 * time.Second
-	setupRetryDelay   = 30 * time.Second
+	hexPrefixBytes    = 16
 )
 
-func main() {
-	listen := flag.String("listen", ":9876", "HTTP listen address")
-	trigger := flag.Duration("trigger", 300*time.Second, "realtime trigger timeout; the exporter resends it before it expires")
-	stale := flag.Duration("stale-after", 30*time.Second, "anker_c1000_up goes 0 when no telemetry frame arrived for this long")
-	printMetrics := flag.Bool("print-metrics", false, "print the metric names and help text, then exit")
-	flag.Parse()
+var errHelp = errors.New("help requested")
 
-	if *printMetrics {
-		printMetricList(*stale)
-		return
-	}
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(log, *listen, *trigger, *stale); err != nil {
-		log.Error("exporter stopped", "err", err)
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	err := run(ctx, os.Args[1:], os.Getenv, os.Stdout)
+	stop()
+	switch {
+	case err == nil, errors.Is(err, errHelp):
+	default:
+		slog.New(slog.NewJSONHandler(os.Stdout, nil)).Error("exporter stopped", "err", err)
 		os.Exit(1)
 	}
 }
 
-func printMetricList(stale time.Duration) {
-	for _, line := range collector.New("SN", stale, time.Now).MetricList() {
-		fmt.Println(line)
+func run(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
+	fs := flag.NewFlagSet("anker-exporter", flag.ContinueOnError)
+	listen := fs.String("listen", ":9876", "HTTP listen address")
+	trigger := fs.Duration("trigger", 300*time.Second, "realtime trigger timeout; the exporter resends it before it expires")
+	stale := fs.Duration("stale-after", 30*time.Second, "anker_c1000_up goes 0 when no telemetry frame arrived for this long")
+	printMetrics := fs.Bool("print-metrics", false, "print the metric names and help text, then exit")
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return errHelp
+		}
+		return err
 	}
-}
-
-func run(log *slog.Logger, listen string, trigger, stale time.Duration) error {
-	cfg, err := config.Load(os.Getenv)
+	if *printMetrics {
+		for _, line := range collector.New("SN", *stale, time.Now).MetricList() {
+			_, _ = fmt.Fprintln(stdout, line)
+		}
+		return nil
+	}
+	if err := validateTrigger(*trigger); err != nil {
+		return err
+	}
+	cfg, err := config.Load(getenv)
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer stop()
 
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	reg := prometheus.NewRegistry()
 	reg.MustRegister(collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	return serve(ctx, log, *listen, reg, func(ctx context.Context) error {
+		return work(ctx, log, cfg, reg, *trigger, *stale)
+	})
+}
 
+// validateTrigger applies the bounds frame.BuildTrigger enforces, before the slow login.
+func validateTrigger(d time.Duration) error {
+	if _, err := frame.BuildTrigger("sn", "uid", "cid", int(d/time.Second), time.Now()); err != nil {
+		return fmt.Errorf("invalid -trigger %v: %w", d, err)
+	}
+	return nil
+}
+
+// serve runs the HTTP endpoints and the worker. It returns the worker error, so the process exits
+// non-zero, unless the worker ended because ctx was cancelled.
+func serve(ctx context.Context, log *slog.Logger, listen string, reg *prometheus.Registry, worker func(context.Context) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	srv := &http.Server{Addr: listen, Handler: newMux(reg), ReadHeaderTimeout: readHeaderTimeout}
 	srvErr := make(chan error, 1)
 	go func() { srvErr <- srv.ListenAndServe() }()
 	log.Info("listening", "addr", listen)
 
 	workerDone := make(chan error, 1)
-	go func() { workerDone <- work(ctx, log, cfg, reg, trigger, stale) }()
+	go func() { workerDone <- worker(ctx) }()
 
+	var result error
 	select {
-	case err = <-srvErr:
-		stop()
+	case err := <-srvErr:
+		cancel()
 		<-workerDone
 		return fmt.Errorf("http server: %w", err)
-	case err = <-workerDone:
+	case err := <-workerDone:
 		if err != nil && !errors.Is(err, context.Canceled) {
-			log.Error("worker stopped", "err", err)
+			result = fmt.Errorf("worker: %w", err)
 		}
 	case <-ctx.Done():
 		<-workerDone
 	}
 	log.Info("shutting down")
-	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	if err = srv.Shutdown(shutCtx); err != nil {
-		return fmt.Errorf("shutdown: %w", err)
+	shutCtx, stopShut := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer stopShut()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		return errors.Join(result, fmt.Errorf("shutdown: %w", err))
 	}
-	return nil
+	return result
 }
 
 func newMux(reg *prometheus.Registry) *http.ServeMux {
@@ -103,30 +134,16 @@ func newMux(reg *prometheus.Registry) *http.ServeMux {
 	return mux
 }
 
-// work logs in, then runs the MQTT runner until ctx ends. Setup failures retry, so a slow or
-// down cloud API never takes the HTTP endpoint away.
+// work logs in, then runs the MQTT runner until ctx ends. Setup failures back off, so a slow or
+// rejecting cloud API never takes the HTTP endpoint away.
 func work(ctx context.Context, log *slog.Logger, cfg config.Config, reg prometheus.Registerer, trigger, stale time.Duration) error {
 	cl, err := anker.NewClient(cfg.BaseURL, cfg.Email, cfg.Password, cfg.Country, nil)
 	if err != nil {
 		return err
 	}
-	var sn string
-	for sn == "" {
-		if sn, err = setup(ctx, cl, cfg); err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			var fatal fatalError
-			if errors.As(err, &fatal) {
-				return err
-			}
-			log.Error("setup failed, retrying", "err", err, "retry_in", setupRetryDelay.String())
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(setupRetryDelay):
-			}
-		}
+	sn, err := acquire(ctx, log, func(ctx context.Context) (string, error) { return setup(ctx, cl, cfg) }, defaultBackoff, sleepCtx)
+	if err != nil {
+		return err
 	}
 	log.Info("device selected", "serial", config.MaskSN(sn))
 
@@ -137,17 +154,29 @@ func work(ctx context.Context, log *slog.Logger, cfg config.Config, reg promethe
 	r := mqttsession.NewRunner(cl, sn, trigger, col.Update)
 	r.OnBadFrame = func(err error) {
 		col.CountBadFrame()
-		log.Warn("bad frame", "err", err)
+		log.Warn("bad frame", append([]any{"err", err}, badFrameAttrs(err)...)...)
 	}
 	r.OnConnect = func() { log.Info("mqtt subscribed") }
 	r.OnError = func(err error) { log.Warn("mqtt session error", "err", err) }
 	return r.Run(ctx)
 }
 
-// fatalError marks a setup failure that retrying cannot fix.
-type fatalError struct{ error }
-
-func (e fatalError) Unwrap() error { return e.error }
+// badFrameAttrs describes a frame that failed to decode: no field values, only framing facts.
+func badFrameAttrs(err error) []any {
+	var fe *frame.FrameError
+	if !errors.As(err, &fe) {
+		return nil
+	}
+	raw := fe.Raw
+	attrs := []any{"payload_len", len(raw), "hex_prefix", hex.EncodeToString(raw[:min(len(raw), hexPrefixBytes)])}
+	if len(raw) >= 4 {
+		attrs = append(attrs, "length_field", binary.LittleEndian.Uint16(raw[2:4]))
+	}
+	if len(raw) >= 9 {
+		attrs = append(attrs, "msg_type", hex.EncodeToString(raw[7:9]))
+	}
+	return attrs
+}
 
 func setup(ctx context.Context, cl *anker.Client, cfg config.Config) (string, error) {
 	if err := cl.Login(ctx); err != nil {
@@ -155,7 +184,8 @@ func setup(ctx context.Context, cl *anker.Client, cfg config.Config) (string, er
 	}
 	devs, err := cl.Devices(ctx)
 	if err != nil {
-		return "", fmt.Errorf("devices: %w", err)
+		// %v drops the chain: only a login rejection may count towards the lockout cap.
+		return "", fmt.Errorf("devices: %v", err) //nolint:errorlint // deliberate
 	}
 	sn, err := pickDevice(devs, cfg.DeviceSN)
 	if err != nil {
