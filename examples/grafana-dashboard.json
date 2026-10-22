@@ -576,7 +576,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 8,
+        "y": 14,
         "w": 12,
         "h": 8
       },
@@ -671,7 +671,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 8,
+        "y": 14,
         "w": 12,
         "h": 8
       },
@@ -764,7 +764,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 22,
         "w": 12,
         "h": 8
       },
@@ -833,7 +833,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 22,
         "w": 12,
         "h": 8
       },
@@ -900,7 +900,7 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 24,
+        "y": 30,
         "w": 24,
         "h": 6
       },
@@ -1083,9 +1083,9 @@
     },
     {
       "id": 15,
-      "type": "timeseries",
-      "title": "How does the projected cost move?",
-      "description": "Projected monthly cost at the output power of each moment.",
+      "type": "stat",
+      "title": "Where is the monthly cost heading?",
+      "description": "Projected monthly cost in 24 hours, from the linear trend of the last 24 hours (MetricsQL predict_linear).",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds}"
@@ -1093,7 +1093,7 @@
       "gridPos": {
         "x": 12,
         "y": 4,
-        "w": 12,
+        "w": 6,
         "h": 4
       },
       "targets": [
@@ -1102,9 +1102,151 @@
             "type": "prometheus",
             "uid": "${ds}"
           },
-          "expr": "anker_c1000_projected_monthly_cost",
+          "expr": "clamp_min(predict_linear(anker_c1000_projected_monthly_cost[24h], 86400), 0)",
           "legendFormat": "{{currency}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "What did this period cost?",
+      "description": "Energy cost of the selected time range at the average draw, before conversion losses.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 4,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "avg_over_time(anker_c1000_projected_monthly_cost[$__range]) * $__range_s / (730 * 3600)",
+          "legendFormat": "{{currency}}",
+          "refId": "A",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "mappings": [],
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "justifyMode": "auto",
+        "orientation": "auto"
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "How does the projected cost move?",
+      "description": "Projected monthly cost at the output power of each moment, with an exponentially smoothed trend (MetricsQL smooth_exponential) and a rolling daily average.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 24,
+        "h": 6
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "anker_c1000_projected_monthly_cost",
+          "legendFormat": "Now {{currency}}",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "smooth_exponential(anker_c1000_projected_monthly_cost, 0.05)",
+          "legendFormat": "Smoothed trend",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds}"
+          },
+          "expr": "avg_over_time(anker_c1000_projected_monthly_cost[1d])",
+          "legendFormat": "Daily average",
+          "refId": "C"
         }
       ],
       "fieldConfig": {
